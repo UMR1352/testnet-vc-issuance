@@ -1,0 +1,15 @@
+[package]
+name = "testnet-vc-issuance"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+identity_iota = { git = "https://github.com/iotaledger/identity.git", branch = "feat/vc-data-model-2", features = [
+    "send-sync",
+    "iota-client",
+    "memstore",
+    "revocation-bitmap",
+] }
+iota_sdk = { git = "https://github.com/iotaledger/iota.git", package = "iota-sdk", tag = "v1.10.0" }
+tokio = { version = "1", features = ["rt", "macros"] }
+anyhow = "1"
