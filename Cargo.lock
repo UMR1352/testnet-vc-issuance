@@ -7824,6 +7824,7 @@ name = "testnet-vc-issuance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "identity_eddsa_verifier",
  "identity_iota",
  "iota-sdk 1.10.0",
  "tokio",
