@@ -1,5 +1,4 @@
 use anyhow::Context;
-use eddsa_jws_verifier::EdDSAJwsVerifier;
 use identity_iota::core::FromJson;
 use identity_iota::core::Object;
 use identity_iota::core::Url;
@@ -25,19 +24,25 @@ use identity_iota::iota::IotaDocument;
 use identity_iota::iota::rebased::client::IdentityClientReadOnly;
 use identity_iota::prelude::IotaDID;
 use identity_iota::storage::JwkDocumentExt;
-use identity_iota::storage::JwkMemStore;
 use identity_iota::storage::JwkStorage;
 use identity_iota::storage::JwsSignatureOptions;
-use identity_iota::storage::KeyIdMemstore;
 use identity_iota::storage::KeyIdStorage;
 use identity_iota::storage::MethodDigest;
 use identity_iota::storage::Storage;
 use identity_iota::verification::jwk::Jwk;
 use iota_sdk::IotaClientBuilder;
+use jws_verifier::EdECDSAVerifier;
+use memstore::JwkMemStore;
+use memstore::KeyIdMemStore;
 
-type MemStorage = Storage<JwkMemStore, KeyIdMemstore>;
+type MemStorage = Storage<JwkMemStore, KeyIdMemStore>;
 
-const ISSUER_SK_JWK: &str = r#"{"kty":"OKP","alg":"EdDSA","crv":"Ed25519","x":"Fu14kRcyKvkq8rwkpjeCQib1cMnzffABKt3bqDku0QY","d":"tAkoWykqE1d7a4_oPK34O-f3sipoZs5cocs1X1OrSvc"}"#;
+mod jws_verifier;
+mod memstore;
+
+const ISSUER_SK_JWK_ED25519: &str = r#"{"kty":"OKP","alg":"EdDSA","crv":"Ed25519","x":"Fu14kRcyKvkq8rwkpjeCQib1cMnzffABKt3bqDku0QY","d":"tAkoWykqE1d7a4_oPK34O-f3sipoZs5cocs1X1OrSvc"}"#;
+const ISSUER_SK_JWK_SECP256R1: &str = r#"{"kty":"EC","alg":"ES256","crv":"P-256","x":"-_-Mk1gKHKQ1xB1HK_rn0zrI0Oi7F3U8ikmL68NAizs","y":"O7eZWQN39LEqoPj7ANjedWxPwz4kyENeZz0Wee7rvIg","d":"Y_mxnJhvDSVxIA7sqYhWqiLaljF6DEiKnJwtmkSUsiw"}"#;
+const ISSUER_SK_JWK_SECP256K1: &str = r#"{"kty":"EC","alg":"ES256K","crv":"secp256k1","x":"xG44UKSdX8mM80WLW1cWQj2-c7IOXTZSotcua11ziIc","y":"fQf8Yl5L2ZcLoMjIBKiJ7IQviAWCgpASJVLiUJfs1Ko","d":"QTz06zFX9ZCV_hsgEwWrACuDuOXZ9YFF8QrAqdOgK6E"}"#;
 const ISSUER_DID: &str =
     "did:iota:testnet:0x7db4221efeb1ade76a54aef3af9e3410ce0c8ea5fc12b45bb7a348e0c465ec41";
 
@@ -46,25 +51,34 @@ const HOLDER_DID: &str =
     "did:iota:testnet:0x3d5da894b57b586781737dd82af550d3244b1d9be9400cc8d0eb2ad84c3bff29";
 const CREDENTIAL_REVOCATION_INDEX: u32 = 42;
 
-async fn make_issuer(key_store: &MemStorage) -> anyhow::Result<(IotaDocument, String)> {
+async fn make_issuer(key_store: &MemStorage) -> anyhow::Result<IotaDocument> {
     let iota_client = IotaClientBuilder::default().build_testnet().await?;
     let identity_client = IdentityClientReadOnly::new(iota_client).await?;
-
-    let sk_jwk = Jwk::from_json(ISSUER_SK_JWK)?;
 
     let did_document = identity_client
         .resolve_did(&IotaDID::parse(ISSUER_DID)?)
         .await?;
-    let vm = did_document.methods(None)[0];
-    let fragment = vm.id().fragment().expect("fragment is set").to_owned();
 
-    let key_id = key_store.key_storage().insert(sk_jwk).await?;
-    key_store
-        .key_id_storage()
-        .insert_key_id(MethodDigest::new(vm)?, key_id.clone())
-        .await?;
+    // Feel storage with the hardcoded keys.
+    for (i, jwk) in [
+        Jwk::from_json(ISSUER_SK_JWK_ED25519)?,
+        Jwk::from_json(ISSUER_SK_JWK_SECP256R1)?,
+        Jwk::from_json(ISSUER_SK_JWK_SECP256K1)?,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let vm = did_document
+            .resolve_method(&format!("key-{i}"), None)
+            .unwrap();
+        let key_id = key_store.key_storage().insert(jwk).await?;
+        key_store
+            .key_id_storage()
+            .insert_key_id(MethodDigest::new(vm)?, key_id)
+            .await?;
+    }
 
-    Ok((did_document, fragment))
+    Ok(did_document)
 }
 
 async fn make_holder(key_store: &MemStorage) -> anyhow::Result<(IotaDocument, String)> {
@@ -124,8 +138,8 @@ async fn issue_credential(
     let credential_jwt = issuer_document
         .create_credential_v2_jwt(
             &credential,
-            &storage,
-            &issuer_fragment,
+            storage,
+            issuer_fragment,
             &JwsSignatureOptions::default(),
         )
         .await?;
@@ -149,7 +163,7 @@ async fn make_jwt_presentation(
     holder_document
         .create_presentation_jwt(
             &presentation,
-            &key_store,
+            key_store,
             fragment,
             &JwsSignatureOptions::default(),
             &JwtPresentationOptions::default(),
@@ -164,7 +178,7 @@ async fn validate_presentation(
     holder_document: &IotaDocument,
 ) -> anyhow::Result<()> {
     let presentation: Presentation<EnvelopedVc, Object> =
-        JwtPresentationValidator::with_signature_verifier(EdDSAJwsVerifier::default())
+        JwtPresentationValidator::with_signature_verifier(EdECDSAVerifier)
             .validate(
                 jwt_presentation,
                 holder_document,
@@ -172,8 +186,7 @@ async fn validate_presentation(
             )?
             .presentation;
 
-    let credential_validator =
-        JwtCredentialValidator::with_signature_verifier(EdDSAJwsVerifier::default());
+    let credential_validator = JwtCredentialValidator::with_signature_verifier(EdECDSAVerifier);
     for maybe_jwt_credential in presentation
         .verifiable_credential
         .into_iter()
@@ -194,11 +207,15 @@ async fn validate_presentation(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let key_store = Storage::new(JwkMemStore::new(), KeyIdMemstore::new());
-    let (issuer_document, issuer_fragment) = make_issuer(&key_store).await?;
+    let key_store = Storage::new(JwkMemStore::default(), KeyIdMemStore::default());
+    let issuer_document = make_issuer(&key_store).await?;
+    // key-0 -> ed25519,
+    // key-1 -> secp256r1,
+    // key-2 -> secp256k1,
+    let issuer_fragment = "key-0";
     let (holder_document, holder_fragment) = make_holder(&key_store).await?;
 
-    let jwt_credential = issue_credential(&issuer_document, &issuer_fragment, &key_store).await?;
+    let jwt_credential = issue_credential(&issuer_document, issuer_fragment, &key_store).await?;
     println!("Issued Credential JWT > {}", jwt_credential.as_str());
 
     let jwt_presentation = make_jwt_presentation(

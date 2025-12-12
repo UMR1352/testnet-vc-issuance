@@ -11,6 +11,17 @@ identity_iota = { git = "https://github.com/iotaledger/identity.git", branch = "
     "revocation-bitmap",
 ] }
 eddsa_jws_verifier = { git = "https://github.com/iotaledger/identity.git", package = "identity_eddsa_verifier", branch = "feat/vc-data-model-2" }
+ecdsa_jws_verifier = { git = "https://github.com/iotaledger/identity.git", package = "identity_ecdsa_verifier", branch = "feat/vc-data-model-2" }
 iota_sdk = { git = "https://github.com/iotaledger/iota.git", package = "iota-sdk", tag = "v1.10.0" }
 tokio = { version = "1", features = ["rt", "macros"] }
 anyhow = "1"
+async-trait = "0.1.89"
+ed25519-compact = { version = "2.2.0", default-features = false, features = [
+    "std",
+    "random",
+] }
+p256 = "0.13.2"
+k256 = "0.13.4"
+base64ct = { version = "1.8.1", features = ["alloc", "std"] }
+serde_json = "1.0.145"
+rand = "0.8"
